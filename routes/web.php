@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Route;
 
 
 Route::get('/', [HomeController::class, 'index']);
-Route::get('/Login', [LoginController::class, 'login']);
+Route::get('/user-login', [LoginController::class, 'login']);
 Route::post('/doLogin', [LoginController::class, 'doLogin']);
 Route::post('/doRegister', [LoginController::class, 'doRegister']);
 Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
@@ -18,6 +18,8 @@ Route::get('/resetPassword/{token}', [ForgotPassword::class, 'showResetForm'])->
 Route::post('/resetPassword', [ForgotPassword::class, 'resetPassword'])->name('password.update');
 Route::get('/verify-otp', [LoginController::class, 'showOtpForm'])->name('otp.form');
 Route::post('/verify-otp', [LoginController::class, 'verifyOtp'])->name('otp.verify');
+Route::get('/otp/resend', [LoginController::class, 'resendOtp'])->name('otp.resend');
+
 
 
 

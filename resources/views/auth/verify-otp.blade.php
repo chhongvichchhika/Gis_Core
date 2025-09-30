@@ -209,7 +209,7 @@
                     id="otp" 
                     name="otp" 
                     maxlength="6" 
-                    placeholder="000000"
+                    placeholder=" "
                     pattern="[0-9]{6}"
                     inputmode="numeric"
                     required 
@@ -219,9 +219,36 @@
             <button type="submit">Verify Code</button>
         </form>
 
-        <div class="resend-link">
-            Didn't receive the code? <a href="#">Resend</a>
-        </div>
+     <div class="resend-link">
+        Didn't receive the code? <a href="#" id="resend-otp">Resend</a>
+    </div>
+
+
+@if(session('success'))
+    <div class="success-message" style="color: green; text-align:center; margin-top:10px;">
+        {{ session('success') }}
+    </div>
+@endif
+
     </div>
 </body>
+<script>
+document.getElementById('resend-otp').addEventListener('click', function(e) {
+    e.preventDefault();
+
+    fetch("{{ route('otp.resend') }}")
+        .then(res => res.json())
+        .then(data => {
+            alert(data.message); // optional: show success message
+            if(data.success && data.redirect){
+                // redirect the user to OTP screen
+                window.location.href = data.redirect;
+            }
+        })
+        .catch(err => {
+            alert('Something went wrong. Please try again.');
+        });
+});
+</script>
+
 </html>

@@ -13,6 +13,8 @@ use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\OtpMail;
+use Illuminate\Support\Facades\Session;
+
 class LoginController extends Controller
 {
     /**
@@ -26,7 +28,7 @@ class LoginController extends Controller
     /**
      * Handle login request
      */
-   public function doLogin(Request $request)
+  public function doLogin(Request $request)
 {
     $validator = Validator::make($request->all(), [
         'email' => 'required|email',
@@ -42,27 +44,25 @@ class LoginController extends Controller
     }
 
     $credentials = $request->only('email', 'password');
-    $remember = $request->has('remember');
 
-    if (Auth::attempt($credentials, $remember)) {
-        $request->session()->regenerate();
+    // Check credentials manually without logging in
+    if (Auth::validate($credentials)) {
+        $email = $request->input('email');
 
         // Generate OTP
         $otp = rand(100000, 999999);
-
-        // Store OTP with expiry (5 minutes) keyed by email
-        $email = Auth::user()->email;
         Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
 
-        // Optional: store email in session in case you decide to logout user before verification
-        session(['otp_email' => $email, 'otp_verified' => false]);
+        // Store email in session to track OTP verification
+        session([
+            'otp_email' => $email,
+            'otp_verified' => false
+        ]);
 
-        // Send OTP email (wrap try/catch to handle mail errors)
+        // Send OTP via Mailtrap
         try {
             Mail::to($email)->send(new OtpMail($otp));
         } catch (\Exception $e) {
-            // If mail fails, log user out and return error
-            Auth::logout();
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to send OTP. Please try again later.'
@@ -82,6 +82,7 @@ class LoginController extends Controller
     ], 401);
 }
 
+
 public function showOtpForm()
 {
     // RETURN the OTP *verification* form — NOT the email template
@@ -91,104 +92,133 @@ public function showOtpForm()
 public function verifyOtp(Request $request)
 {
     $request->validate([
-        'otp' => 'required|digits:6',
+        'otp' => 'required|numeric',
     ]);
 
-    // Prefer Auth user email, fallback to session('otp_email') if needed
-    $email = Auth::check() ? Auth::user()->email : session('otp_email');
-
-    if (! $email) {
-        return redirect('/login')->withErrors(['email' => 'Session expired. Please log in again.']);
-    }
-
+    $email = session('otp_email');
     $storedOtp = Cache::get('otp_' . $email);
 
     if ($storedOtp && $storedOtp == $request->otp) {
-        Cache::forget('otp_' . $email);
-        session()->forget('otp_email');
+        // Mark user as verified
         session(['otp_verified' => true]);
 
-        // user is already authenticated (Auth::attempt earlier) — proceed to dashboard/home
+        // Fully log in the user
+        $user = \App\Models\User::where('email', $email)->first();
+        Auth::login($user);
+
+        Cache::forget('otp_' . $email);
+
         return redirect('/')->with('success', 'Login successful!');
     }
 
     return back()->withErrors(['otp' => 'Invalid or expired OTP']);
 }
 
+
     /**
      * Handle registration request
      */
     public function doRegister(Request $request)
-    {
-        try {
-            // Log incoming request for debugging
-            Log::info('Registration attempt', [
-                'name' => $request->name,
-                'email' => $request->email,
-                'has_password' => $request->has('password'),
-                'has_password_confirmation' => $request->has('password_confirmation')
-            ]);
+{
+    try {
+        // Log incoming request
+        Log::info('Registration attempt', [
+            'name' => $request->name,
+            'email' => $request->email,
+            'has_password' => $request->has('password'),
+            'has_password_confirmation' => $request->has('password_confirmation')
+        ]);
 
-            // Validate input
-            $validator = Validator::make($request->all(), [
-                'name' => 'required|string|max:255',
-                'email' => 'required|email|unique:users,email',
-                'password' => 'required|string|min:6|confirmed',
-            ]);
+        // Validate input
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6|confirmed',
+        ]);
 
-            if ($validator->fails()) {
-                Log::warning('Registration validation failed', $validator->errors()->toArray());
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Validation failed',
-                    'errors' => $validator->errors()
-                ], 422);
-            }
-
-            // Create user
-            $user = User::create([
-                'name' => $request->name,
-                'email' => $request->email,
-                'password' => Hash::make($request->password),
-            ]);
-
-            Log::info('User created successfully', ['user_id' => $user->id]);
-
-            // Auto login after registration
-            Auth::login($user);
-            $request->session()->regenerate();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Registration successful',
-                'redirect' => url('/login')
-            ]);
-
-        } catch (\Illuminate\Database\QueryException $e) {
-            Log::error('Database error during registration', [
-                'error' => $e->getMessage(),
-                'code' => $e->getCode()
-            ]);
-            
+        if ($validator->fails()) {
+            Log::warning('Registration validation failed', $validator->errors()->toArray());
             return response()->json([
                 'success' => false,
-                'message' => 'Database error: ' . $e->getMessage()
-            ], 500);
-
-        } catch (\Exception $e) {
-            Log::error('Registration error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            
-            return response()->json([
-                'success' => false,
-                'message' => 'Error: ' . $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine()
-            ], 500);
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
         }
+
+        // Create user without logging in
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+        ]);
+
+        Log::info('User created successfully', ['user_id' => $user->id]);
+
+        // Return success and redirect to login page
+        return response()->json([
+            'success' => true,
+            'message' => 'Registration successful. Please log in.',
+            'redirect' => url('/user-login') // use your route
+        ]);
+
+
+    } catch (\Illuminate\Database\QueryException $e) {
+        Log::error('Database error during registration', [
+            'error' => $e->getMessage(),
+            'code' => $e->getCode()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Database error: ' . $e->getMessage()
+        ], 500);
+
+    } catch (\Exception $e) {
+        Log::error('Registration error', [
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Error: ' . $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine()
+        ], 500);
     }
+}
+
+public function resendOtp()
+{
+    $email = session('otp_email');
+
+    if (!$email) {
+        return response()->json([
+            'success' => false,
+            'message' => 'No email found for OTP. Please login again.'
+        ], 400);
+    }
+
+    $otp = rand(100000, 999999);
+    Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
+
+    try {
+        Mail::to($email)->send(new OtpMail($otp));
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to resend OTP. Please try again later.'
+        ], 500);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'A new OTP has been sent to your email.',
+        'redirect' => route('otp.form') // your OTP screen route
+    ]);
+}
+
+
 
     /**
      * Handle logout

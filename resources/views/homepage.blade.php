@@ -295,10 +295,10 @@
     @else
         <!-- Show when user is NOT logged in -->
         <li class="nav-item">
-            <a class="nav-link btn-login me-2" href="{{ url('/Login') }}">Login</a>
+            <a class="nav-link btn-login me-2" href="{{ url('/user-login') }}">Login</a>
         </li>
         <li class="nav-item">
-            <a class="nav-link btn-register" href="{{ url('/Login') }}">Get Started</a>
+            <a class="nav-link btn-register" href="{{ url('/user-login') }}">Get Started</a>
         </li>
     @endauth
 </ul>
