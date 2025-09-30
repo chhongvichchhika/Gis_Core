@@ -10,7 +10,9 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use App\Models\User;
-
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\OtpMail;
 class LoginController extends Controller
 {
     /**
@@ -24,41 +26,94 @@ class LoginController extends Controller
     /**
      * Handle login request
      */
-    public function doLogin(Request $request)
-    {
-        // Validate input
-        $validator = Validator::make($request->all(), [
-            'email' => 'required|email',
-            'password' => 'required|string|min:6',
-        ]);
+   public function doLogin(Request $request)
+{
+    $validator = Validator::make($request->all(), [
+        'email' => 'required|email',
+        'password' => 'required|string|min:6',
+    ]);
 
-        if ($validator->fails()) {
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation failed',
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    $credentials = $request->only('email', 'password');
+    $remember = $request->has('remember');
+
+    if (Auth::attempt($credentials, $remember)) {
+        $request->session()->regenerate();
+
+        // Generate OTP
+        $otp = rand(100000, 999999);
+
+        // Store OTP with expiry (5 minutes) keyed by email
+        $email = Auth::user()->email;
+        Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
+
+        // Optional: store email in session in case you decide to logout user before verification
+        session(['otp_email' => $email, 'otp_verified' => false]);
+
+        // Send OTP email (wrap try/catch to handle mail errors)
+        try {
+            Mail::to($email)->send(new OtpMail($otp));
+        } catch (\Exception $e) {
+            // If mail fails, log user out and return error
+            Auth::logout();
             return response()->json([
                 'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        // Attempt login
-        $credentials = $request->only('email', 'password');
-        $remember = $request->has('remember');
-
-        if (Auth::attempt($credentials, $remember)) {
-            $request->session()->regenerate();
-            
-            return response()->json([
-                'success' => true,
-                'message' => 'Login successful',
-                'redirect' => url('/')
-            ]);
+                'message' => 'Failed to send OTP. Please try again later.'
+            ], 500);
         }
 
         return response()->json([
-            'success' => false,
-            'message' => 'Invalid email or password'
-        ], 401);
+            'success' => true,
+            'message' => 'OTP sent to your email. Please verify.',
+            'redirect' => url('/verify-otp')
+        ]);
     }
+
+    return response()->json([
+        'success' => false,
+        'message' => 'Invalid email or password'
+    ], 401);
+}
+
+public function showOtpForm()
+{
+    // RETURN the OTP *verification* form — NOT the email template
+    return view('auth.verify-otp');
+}
+
+public function verifyOtp(Request $request)
+{
+    $request->validate([
+        'otp' => 'required|digits:6',
+    ]);
+
+    // Prefer Auth user email, fallback to session('otp_email') if needed
+    $email = Auth::check() ? Auth::user()->email : session('otp_email');
+
+    if (! $email) {
+        return redirect('/login')->withErrors(['email' => 'Session expired. Please log in again.']);
+    }
+
+    $storedOtp = Cache::get('otp_' . $email);
+
+    if ($storedOtp && $storedOtp == $request->otp) {
+        Cache::forget('otp_' . $email);
+        session()->forget('otp_email');
+        session(['otp_verified' => true]);
+
+        // user is already authenticated (Auth::attempt earlier) — proceed to dashboard/home
+        return redirect('/')->with('success', 'Login successful!');
+    }
+
+    return back()->withErrors(['otp' => 'Invalid or expired OTP']);
+}
 
     /**
      * Handle registration request
